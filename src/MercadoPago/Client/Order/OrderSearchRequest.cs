@@ -50,17 +50,17 @@ namespace MercadoPago.Client.Order
         public string PaymentMethodType { get; set; }
 
         /// <summary>
-        /// Zero-based page number for paginated results.
+        /// Page number for paginated results (starting at 1).
         /// </summary>
         public int? Page { get; set; }
 
         /// <summary>
-        /// Number of results per page.
+        /// Number of results per page (up to 100; defaults to 20 when omitted).
         /// </summary>
         public int? PageSize { get; set; }
 
         /// <summary>
-        /// Field name used to sort the results (e.g., "date_created").
+        /// Field name used to sort the results (e.g., "created_date" or "last_updated_date").
         /// </summary>
         public string SortBy { get; set; }
 

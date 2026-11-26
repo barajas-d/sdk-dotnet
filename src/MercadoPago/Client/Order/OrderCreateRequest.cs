@@ -106,14 +106,58 @@ namespace MercadoPago.Client.Order
         public OrderShipmentRequest Shipment { get; set; }
 
         /// <summary>
-        /// Free-form dictionary for any additional metadata to attach to the order.
+        /// Request-body additional_info for Checkout Pro and Wallet Connect order creation.
+        /// Checkout Pro accepts an object with dotted keys such as "payer.registration_date"
+        /// and "payer.is_prime_user"; keep those keys intact rather than nesting a payer object.
+        /// Wallet Connect can supply a "sub_merchant" object, including integer address_door_number.
+        /// This request property does not depend on additional_info appearing in the 201 response.
         /// </summary>
+        [JsonProperty("additional_info")]
         public IDictionary<string, object> AdditionalInfo { get; set; }
+
+        /// <summary>
+        /// Request-only payment-method discounts for QR and QR-CA order creation.
+        /// Serialized as discounts.payment_methods, an array whose items contain string
+        /// type and new_total_amount fields, distinct from payment-level response discounts.
+        /// </summary>
+        /// <seealso cref="OrderDiscountsRequest"/>
+        [JsonProperty("discounts")]
+        public OrderDiscountsRequest Discounts { get; set; }
 
         /// <summary>
         /// Integration metadata identifying the integrator, platform, corporation, and sponsor.
         /// </summary>
         /// <seealso cref="OrderIntegrationDataRequest"/>
         public OrderIntegrationDataRequest IntegrationData { get; set; }
+    }
+
+    /// <summary>
+    /// Payment-method discounts to include in a QR order creation request.
+    /// </summary>
+    public class OrderDiscountsRequest
+    {
+        /// <summary>
+        /// Discounts offered for individual payment methods.
+        /// </summary>
+        [JsonProperty("payment_methods")]
+        public IList<OrderDiscountPaymentMethodRequest> PaymentMethods { get; set; }
+    }
+
+    /// <summary>
+    /// Discount offered for a payment method in a QR order creation request.
+    /// </summary>
+    public class OrderDiscountPaymentMethodRequest
+    {
+        /// <summary>
+        /// Payment method type eligible for the discount.
+        /// </summary>
+        [JsonProperty("type")]
+        public string Type { get; set; }
+
+        /// <summary>
+        /// Total amount after applying the discount.
+        /// </summary>
+        [JsonProperty("new_total_amount")]
+        public string NewTotalAmount { get; set; }
     }
 }

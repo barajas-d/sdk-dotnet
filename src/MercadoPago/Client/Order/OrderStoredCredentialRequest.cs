@@ -4,19 +4,19 @@ namespace MercadoPago.Client.Order
 {
     /// <summary>
     /// Stored credential information for recurring or merchant-initiated transactions.
-    /// Indicates whether a card-on-file is being used and who initiated the payment,
-    /// as required by card network regulations.
+    /// For Wallet Connect, include this node only for recurring payments; omit it for
+    /// one-shot payments.
     /// </summary>
     /// <seealso cref="OrderPaymentRequest"/>
     public class OrderStoredCredentialRequest
     {
         /// <summary>
-        /// Who initiated the payment: "cardholder" for customer-initiated or "merchant" for merchant-initiated transactions.
+        /// Who initiated the payment. For Wallet Connect recurring payments, use "merchant".
         /// </summary>
         public string PaymentInitiator { get; set; }
 
         /// <summary>
-        /// Reason for storing the credential (e.g., "recurring_payment", "installment").
+        /// Reason for the stored credential. For Wallet Connect recurring payments, use "recurring".
         /// </summary>
         public string Reason { get; set; }
 
