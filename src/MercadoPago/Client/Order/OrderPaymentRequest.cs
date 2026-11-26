@@ -43,7 +43,9 @@ namespace MercadoPago.Client.Order
         public OrderAutomaticPaymentRequest AutomaticPayments { get; set; }
 
         /// <summary>
-        /// Stored credential information for merchant-initiated or cardholder-initiated recurring transactions.
+        /// Stored credential information for recurring transactions. For Wallet Connect, omit this
+        /// property for one-shot payments; for recurring payments set the payment initiator to
+        /// "merchant" and the reason to "recurring".
         /// </summary>
         /// <seealso cref="OrderStoredCredentialRequest"/>
         public OrderStoredCredentialRequest StoredCredential { get; set; }

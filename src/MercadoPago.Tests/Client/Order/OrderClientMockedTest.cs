@@ -1,5 +1,11 @@
+using System;
 using System.Collections.Generic;
+using System.Net;
 using System.Net.Http;
+using System.Threading;
+using System.Threading.Tasks;
+using Moq;
+using Moq.Protected;
 using HttpMethodNet = System.Net.Http.HttpMethod;
 using MercadoPago.Client.Order;
 using MercadoPago.Config;
@@ -222,6 +228,270 @@ namespace MercadoPago.Tests.Client.Order
             Assert.Equal("custom", order.Shipment.Mode);
             Assert.Equal(73328, order.Shipment.FreeMethods[0].Id.Value);
             Assert.Equal("B", order.Shipment.Address.Apartment);
+        }
+
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public async Task Search_SplitOneToManyFilters_TransportAndResponse(bool asynchronous)
+        {
+            const string responseJson = @"{
+                ""data"": [{ ""id"": ""ORD01K9SN1Q5959CGN8QGW00EH7V5"", ""type"": ""online"",
+                    ""status"": ""processed"", ""external_reference"": ""ext_ref_1234"" }],
+                ""paging"": { ""total"": ""54"", ""total_pages"": ""3"", ""offset"": ""0"", ""limit"": ""20"" }
+            }";
+            HttpRequestMessage sentRequest = null;
+            CancellationToken sentToken = default;
+            var handler = new Mock<HttpMessageHandler>();
+            handler.Protected()
+                .Setup<Task<HttpResponseMessage>>(
+                    "SendAsync",
+                    ItExpr.IsAny<HttpRequestMessage>(),
+                    ItExpr.IsAny<CancellationToken>())
+                .Callback<HttpRequestMessage, CancellationToken>((message, token) =>
+                {
+                    sentRequest = message;
+                    sentToken = token;
+                })
+                .ReturnsAsync(() => new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(responseJson),
+                });
+            var client = new OrderClient(
+                new DefaultHttpClient(new HttpClient(handler.Object)), new DefaultSerializer());
+            var options = new RequestOptions { AccessToken = "offline-search-token" };
+            options.CustomHeaders.Add("X-Search-Test", "split-1n");
+            var filters = new OrderSearchRequest
+            {
+                BeginDate = "2025-11-01T00:00:00.000Z",
+                EndDate = "2025-11-11T23:59:59.999Z",
+                ExternalReference = "ext_ref_1234",
+                Type = "online",
+                Status = "processed",
+                StatusDetail = "accredited",
+                PaymentMethodId = "visa",
+                PaymentMethodType = "credit_card",
+                Page = 2,
+                PageSize = 20,
+                SortBy = "created_date",
+                SortOrder = "desc",
+            };
+            using var cancellation = new CancellationTokenSource();
+
+            OrderSearchResponse result = asynchronous
+                ? await client.SearchAsync(filters, options, cancellation.Token)
+                : client.Search(filters, options);
+
+            handler.Protected().Verify(
+                "SendAsync", Times.Once(),
+                ItExpr.IsAny<HttpRequestMessage>(), ItExpr.IsAny<CancellationToken>());
+            Assert.NotNull(sentRequest);
+            Assert.Equal(HttpMethodNet.Get, sentRequest.Method);
+            Assert.Equal("/v1/orders", sentRequest.RequestUri.AbsolutePath);
+            Assert.Equal("Bearer offline-search-token", sentRequest.Headers.Authorization.ToString());
+            Assert.Equal("split-1n", Assert.Single(sentRequest.Headers.GetValues("X-Search-Test")));
+            Assert.Equal(asynchronous ? cancellation.Token : default, sentToken);
+            var query = new Dictionary<string, string>();
+            foreach (string pair in sentRequest.RequestUri.Query.TrimStart('?').Split('&'))
+            {
+                string[] parts = pair.Split('=');
+                query.Add(Uri.UnescapeDataString(parts[0]), Uri.UnescapeDataString(parts[1]));
+            }
+
+            Assert.Equal(12, query.Count);
+            Assert.Equal("2025-11-01T00:00:00.000Z", query["begin_date"]);
+            Assert.Equal("2025-11-11T23:59:59.999Z", query["end_date"]);
+            Assert.Equal("ext_ref_1234", query["external_reference"]);
+            Assert.Equal("online", query["type"]);
+            Assert.Equal("processed", query["status"]);
+            Assert.Equal("accredited", query["status_detail"]);
+            Assert.Equal("visa", query["payment_method_id"]);
+            Assert.Equal("credit_card", query["payment_method_type"]);
+            Assert.Equal("2", query["page"]);
+            Assert.Equal("20", query["page_size"]);
+            Assert.Equal("created_date", query["sort_by"]);
+            Assert.Equal("desc", query["sort_order"]);
+            Assert.NotNull(result.ApiResponse);
+            Assert.Equal("ORD01K9SN1Q5959CGN8QGW00EH7V5", Assert.Single(result.Data).Id);
+            Assert.Equal("processed", result.Data[0].Status);
+            Assert.Equal("54", Convert.ToString(result.Paging.Total));
+            Assert.Equal("3", Convert.ToString(result.Paging.TotalPages));
+            Assert.Equal("0", Convert.ToString(result.Paging.Offset));
+            Assert.Equal("20", Convert.ToString(result.Paging.Limit));
+        }
+
+        [Theory]
+        [InlineData(false, false)]
+        [InlineData(false, true)]
+        [InlineData(true, false)]
+        [InlineData(true, true)]
+        public async Task Create_QrDiscounts_TransportAndResponse(bool cashOut, bool asynchronous)
+        {
+            const string responseJson = "{\"id\":\"ORD-QR-1\",\"type\":\"qr\",\"status\":\"created\",\"discounts\":{\"payment_methods\":[{\"type\":\"account_money\",\"new_total_amount\":\"90.00\"}]}}";
+            HttpRequestMessage sentRequest = null;
+            string sentJson = null;
+            CancellationToken sentToken = default;
+            var handler = new Mock<HttpMessageHandler>();
+            handler.Protected().Setup<Task<HttpResponseMessage>>(
+                "SendAsync", ItExpr.IsAny<HttpRequestMessage>(), ItExpr.IsAny<CancellationToken>())
+                .Callback<HttpRequestMessage, CancellationToken>((message, token) =>
+                {
+                    sentRequest = message;
+                    sentToken = token;
+                    sentJson = message.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+                })
+                .ReturnsAsync(() => new HttpResponseMessage(HttpStatusCode.Created)
+                {
+                    Content = new StringContent(responseJson),
+                });
+            var client = new OrderClient(new DefaultHttpClient(new HttpClient(handler.Object)), new DefaultSerializer());
+            var options = new RequestOptions { AccessToken = "offline-qr-token" };
+            options.CustomHeaders.Add("X-Order-Test", "qr-discounts");
+            var request = new OrderCreateRequest
+            {
+                Type = "qr",
+                TotalAmount = "100.00",
+                Discounts = new OrderDiscountsRequest
+                {
+                    PaymentMethods = new List<OrderDiscountPaymentMethodRequest>
+                    {
+                        new OrderDiscountPaymentMethodRequest { Type = "account_money", NewTotalAmount = "90.00" },
+                    },
+                },
+                Transactions = cashOut
+                    ? new OrderTransactionRequest
+                    {
+                        CashOuts = new List<OrderCashOutRequest>
+                        {
+                            new OrderCashOutRequest { Amount = "100.00" },
+                        },
+                    }
+                    : new OrderTransactionRequest
+                    {
+                        Payments = new List<OrderPaymentRequest>
+                        {
+                            new OrderPaymentRequest { Amount = "100.00" },
+                        },
+                    },
+            };
+            using var cancellation = new CancellationTokenSource();
+
+            MercadoPago.Resource.Order.Order order = asynchronous
+                ? await client.CreateAsync(request, options, cancellation.Token)
+                : client.Create(request, options);
+
+            handler.Protected().Verify("SendAsync", Times.Once(),
+                ItExpr.IsAny<HttpRequestMessage>(), ItExpr.IsAny<CancellationToken>());
+            Assert.Equal(HttpMethodNet.Post, sentRequest.Method);
+            Assert.Equal("/v1/orders", sentRequest.RequestUri.AbsolutePath);
+            Assert.Equal("Bearer offline-qr-token", sentRequest.Headers.Authorization.ToString());
+            Assert.Equal("qr-discounts", Assert.Single(sentRequest.Headers.GetValues("X-Order-Test")));
+            Assert.Equal(asynchronous ? cancellation.Token : default, sentToken);
+            var json = JObject.Parse(sentJson);
+            Assert.Equal("qr", (string)json["type"]);
+            var discounts = Assert.IsType<JArray>(json["discounts"]["payment_methods"]);
+            var discount = Assert.IsType<JObject>(Assert.Single(discounts));
+            Assert.Equal(2, discount.Count);
+            Assert.Equal("account_money", (string)discount["type"]);
+            Assert.Equal("90.00", (string)discount["new_total_amount"]);
+            Assert.Equal(cashOut, json["transactions"]["cash_outs"] != null);
+            Assert.Equal(!cashOut, json["transactions"]["payments"] != null);
+            Assert.Equal("ORD-QR-1", order.Id);
+            Assert.Equal("created", order.Status);
+            Assert.Equal("90.00", Assert.Single(order.Discounts.PaymentMethods).NewTotalAmount);
+            Assert.NotNull(order.ApiResponse);
+        }
+
+        [Theory]
+        [InlineData(false, false)]
+        [InlineData(false, true)]
+        [InlineData(true, false)]
+        [InlineData(true, true)]
+        public async Task Create_WalletConnect_TransportAndResponse(bool recurring, bool asynchronous)
+        {
+            const string responseJson = "{\"id\":\"ORD-WALLET-1\",\"type\":\"online\",\"status\":\"created\"}";
+            HttpRequestMessage sentRequest = null;
+            string sentJson = null;
+            CancellationToken sentToken = default;
+            var handler = new Mock<HttpMessageHandler>();
+            handler.Protected().Setup<Task<HttpResponseMessage>>(
+                "SendAsync", ItExpr.IsAny<HttpRequestMessage>(), ItExpr.IsAny<CancellationToken>())
+                .Callback<HttpRequestMessage, CancellationToken>((message, token) =>
+                {
+                    sentRequest = message;
+                    sentToken = token;
+                    sentJson = message.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+                })
+                .ReturnsAsync(() => new HttpResponseMessage(HttpStatusCode.Created)
+                {
+                    Content = new StringContent(responseJson),
+                });
+            var client = new OrderClient(new DefaultHttpClient(new HttpClient(handler.Object)), new DefaultSerializer());
+            var options = new RequestOptions { AccessToken = "offline-wallet-token" };
+            options.CustomHeaders.Add("X-Order-Test", "wallet-connect");
+            var request = new OrderCreateRequest
+            {
+                Type = "online",
+                TotalAmount = "100.00",
+                AdditionalInfo = new Dictionary<string, object>
+                {
+                    ["sub_merchant"] = new Dictionary<string, object>
+                    {
+                        ["id"] = "seller-123",
+                    },
+                },
+                Transactions = new OrderTransactionRequest
+                {
+                    Payments = new List<OrderPaymentRequest>
+                    {
+                        new OrderPaymentRequest
+                        {
+                            Amount = "100.00",
+                            PaymentMethod = new OrderPaymentMethodRequest
+                            {
+                                Token = "offline-wallet-payment-token",
+                            },
+                            StatementDescriptor = "WALLET TEST",
+                            StoredCredential = recurring ? new OrderStoredCredentialRequest
+                            {
+                                PaymentInitiator = "merchant",
+                                Reason = "recurring",
+                            } : null,
+                        },
+                    },
+                },
+            };
+            using var cancellation = new CancellationTokenSource();
+
+            MercadoPago.Resource.Order.Order order = asynchronous
+                ? await client.CreateAsync(request, options, cancellation.Token)
+                : client.Create(request, options);
+
+            handler.Protected().Verify("SendAsync", Times.Once(),
+                ItExpr.IsAny<HttpRequestMessage>(), ItExpr.IsAny<CancellationToken>());
+            Assert.Equal(HttpMethodNet.Post, sentRequest.Method);
+            Assert.Equal("/v1/orders", sentRequest.RequestUri.AbsolutePath);
+            Assert.Equal("Bearer offline-wallet-token", sentRequest.Headers.Authorization.ToString());
+            Assert.Equal("wallet-connect", Assert.Single(sentRequest.Headers.GetValues("X-Order-Test")));
+            Assert.Equal(asynchronous ? cancellation.Token : default, sentToken);
+            var json = JObject.Parse(sentJson);
+            Assert.Equal("online", (string)json["type"]);
+            Assert.Equal("seller-123", (string)json["additional_info"]["sub_merchant"]["id"]);
+            var payment = Assert.IsType<JObject>(Assert.Single((JArray)json["transactions"]["payments"]));
+            Assert.Equal("offline-wallet-payment-token", (string)payment["payment_method"]["token"]);
+            Assert.Equal("WALLET TEST", (string)payment["statement_descriptor"]);
+            if (recurring)
+            {
+                Assert.Equal("merchant", (string)payment["stored_credential"]["payment_initiator"]);
+                Assert.Equal("recurring", (string)payment["stored_credential"]["reason"]);
+            }
+            else
+            {
+                Assert.Null(payment["stored_credential"]);
+            }
+            Assert.Equal("ORD-WALLET-1", order.Id);
+            Assert.Equal("created", order.Status);
+            Assert.NotNull(order.ApiResponse);
         }
 
         [Fact(Skip = "Not running in CI.")]
